@@ -1,0 +1,73 @@
+---
+- name: Install pgAudit 
+  hosts: postgres
+  tasks:
+    - name: Install PostgreSQL Audit Extension
+      become: true
+      apt:
+        name: postgresql-10-pgaudit
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Check postgresql is running
+      become: true
+      service:
+        name: postgresql@10-main.service
+        state: started
+
+    - name: Set shared_preload_libraries
+      become: true
+      lineinfile:
+        state: present
+        regexp: "^#?shared_preload_libraries"
+        path: /etc/postgresql/postgres.conf
+        line: "shared_preload_libraries = 'pgaudit, pg_stat_statements'" 
+      register: postgres_set
+
+    - name: Restart Postgres
+      become: true
+      service:
+        name: postgresql
+        state: restarted
+      when: postgres_set.changed 
+
+    - name: Wait for service 'postgresql' to be running
+      service_facts:
+      register: result
+      until: result.ansible_facts.services['postgresql@10-main.service'].state == 'running'
+      retries: 10
+      delay: 15
+      when: postgres_set.changed and postgres_set.restart_required 
+
+    - name: Adds pgaudit extension to the database postgres 
+      become: true
+      become_user: postgres
+      community.postgresql.postgresql_ext:
+        name: pgaudit
+        db: postgres
+        cascade: true
+
+    - name: Adds pg_stat_statements extension to the database postgres 
+      become: true
+      become_user: postgres
+      community.postgresql.postgresql_ext:
+        name: pg_stat_statements
+        db: postgres
+        cascade: true
+
+    - name: Enabled pgaudit
+      become: true
+      become_user: postgres
+      community.postgresql.postgresql_set:
+        name: pgaudit.log
+        value: 'all'
+      register: postgres_set
+
+    - name: Check service 'postgresql' to be running
+      service_facts:
+      register: result
+      until: result.ansible_facts.services['postgresql@10-main.service'].state == 'running'
+      retries: 10
+      delay: 5
+

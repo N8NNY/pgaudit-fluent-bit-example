@@ -1,0 +1,124 @@
+---
+- name: PostgreSQL Install 
+  hosts: postgres
+  become: true
+  vars:
+    db_user: pgaudit-test
+    db_name: test-pgaudit
+    db_password: pgtest
+  tasks:
+  - name: Install dependencies for PostgreSQL
+    apt: name={{ item }} update_cache=true state=latest
+    with_items:
+    - bash
+    - openssl
+    - libssl-dev
+    - libssl-doc
+    - apt-transport-https
+    - ca-certificates
+    - acl
+
+  - name: Import the repository signing key pgsql
+    ansible.builtin.apt_key:
+      url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+      state: present
+
+  - name: Create the file repository pgsql
+    ansible.builtin.apt_repository:
+      repo: deb [arch=amd64] http://apt.postgresql.org/pub/repos/apt focal-pgdg main
+      state: present
+      filename: pgdg
+
+  - name: Install PostgreSQL 
+    apt: name={{ item }} update_cache=true state=present
+    with_items:
+    - postgresql-10
+    - postgresql-contrib-10
+    - libpq-dev
+    - python3-psycopg2
+
+  - name: Ensure the PostgreSQL service is running
+    service: name=postgresql state=started enabled=yes
+
+  - name: Create the database specified in vars
+    become_user: postgres
+    postgresql_db: name={{ db_name }}
+         template='template0'
+         state=present
+
+  - name: Ensure user has access to the new database
+    become_user: postgres
+    postgresql_user: db={{ db_name }}
+         name={{ db_user }}
+         password={{ db_password }}
+         priv=ALL
+         state=present
+
+  - name: Ensure user does not have unnecessary permissions
+    become_user: postgres
+    postgresql_user: name={{ db_user }}
+         role_attr_flags=NOSUPERUSER,NOCREATEDB
+         state=present
+
+  - name: Ensure directory exists for local self-signed TLS certs.
+    file:
+      path: /etc/ssl/private/{{ inventory_hostname }}
+      state: directory
+    tags: gencert
+
+  - name: Generate an OpenSSL private key.
+    openssl_privatekey:
+      path: /etc/ssl/private/{{ inventory_hostname }}/privkey.pem
+    tags: gencert
+
+  - name: Generate an OpenSSL CSR.
+    openssl_csr:
+      path: /etc/ssl/private/{{ inventory_hostname }}.csr
+      privatekey_path: /etc/ssl/private/{{ inventory_hostname }}/privkey.pem
+      common_name: "{{ inventory_hostname }}"
+    tags: gencert
+
+  - name: Generate a Self Signed OpenSSL certificate.
+    openssl_certificate:
+      path: /etc/ssl/private/{{ inventory_hostname }}/fullchain.pem
+      privatekey_path: /etc/ssl/private/{{ inventory_hostname }}/privkey.pem
+      csr_path: /etc/ssl/private/{{ inventory_hostname }}.csr
+      provider: selfsigned
+    tags: gencert
+
+  - name: Grant priviledge key directory for Postgres
+    file:
+      path: /etc/ssl/private/{{ inventory_hostname }}
+      owner: postgres
+      group: postgres
+      recurse: yes
+
+  - name: add new configuration to "pg_hba.conf"
+    postgresql_pg_hba:
+      dest: /etc/postgresql/10/main/pg_hba.conf
+      contype: hostssl
+      users: all
+      databases: all
+      source: 0.0.0.0/0
+      method: md5
+    notify: Restart PostgreSQL
+
+  - name: add ssl configuration to "postgresql.conf"
+    ini_file:
+      path: /etc/postgresql/10/main/postgresql.conf
+      section: null
+      option: "{{ item.option }}"
+      value: "{{ item.value }}"
+      backup: yes
+    with_items:
+      - { option: "ssl", value: "on" }
+      - { option: "ssl_cert_file", value: "'/etc/ssl/private/{{ inventory_hostname }}/fullchain.pem'" }
+      - { option: "ssl_key_file", value: "'/etc/ssl/private/{{ inventory_hostname }}/privkey.pem'" }
+    notify: Restart PostgreSQL
+
+  handlers:
+    - name: Restart PostgreSQL
+      systemd:
+        name: postgresql
+        state: restarted
+

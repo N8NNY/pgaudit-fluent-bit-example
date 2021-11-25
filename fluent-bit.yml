@@ -1,0 +1,54 @@
+- name: Install fluent-bit
+  become: true
+  hosts: all
+  tasks:
+    - name: Create /etc/fluent-bit/ directory.
+      file:
+        path: /etc/fluent-bit
+        state: directory
+        mode: 0755
+
+    - name: Remove Old fluen-bit db 
+      shell: rm /var/log/postgresql_log*
+      ignore_errors: yes
+
+    - name: Configure fluent-bit config file.
+      block:
+        - name: Configure fluent-bit template 
+          template:
+            src: roles/fluent-bit/templates/fluent-bit.conf.j2
+            dest: /etc/fluent-bit/fluent-bit.conf
+            mode: '0644'
+        - name: Configure fluent-bit parsers template 
+          template:
+            src: roles/fluent-bit/templates/parsers.conf
+            dest: /etc/fluent-bit/parsers.conf
+            mode: '0644'
+      notify: Restart fluent-bit
+
+    - name: Pull fluent-bit Image.
+      community.docker.docker_image:
+        name: fluent/fluent-bit:1.8
+        source: pull
+
+    - name: Run fluent-bit Container.
+      community.docker.docker_container:
+        name: fluent-bit
+        hostname: "{{ hostvars[inventory_hostname]['ansible_hostname'] }}"
+        image: fluent/fluent-bit:1.8
+        restart_policy: "unless-stopped"
+        network_mode: host
+        state: started
+        volumes:
+          - /etc/fluent-bit/fluent-bit.conf:/fluent-bit/etc/fluent-bit.conf
+          - /etc/fluent-bit/parsers.conf:/fluent-bit/etc/parsers.conf
+          - /var/lib/docker:/var/lib/docker
+          - /var/log/nginx:/var/log/nginx
+          - /:/host
+  
+  handlers:
+    - name: Restart fluent-bit
+      community.docker.docker_container:
+        name: fluent-bit
+        restart: true
+

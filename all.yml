@@ -1,0 +1,27 @@
+---
+- name: pgAudit Fluent-bit example
+  hosts: postgres 
+  tasks:
+    - name: Install Docker
+      import_role:
+        name: geerlingguy.docker
+
+    - name: Install python3-docker
+      become: true
+      apt:
+        name: python3-docker
+
+    - name: Install python3-pip
+      become: true
+      apt:
+        name: python3-pip
+
+- name: Install PostgreSQL
+  import_playbook: postgres-server.yml
+
+- name: Install pgAudit
+  import_playbook: pgaudit.yml
+
+- name: Install fluent-bit
+  import_playbook: fluent-bit.yml
+ 
